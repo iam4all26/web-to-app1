@@ -1,0 +1,8 @@
+{
+  "url": "https://example.com",
+  "javascript": true,
+  "show_loading_bar": true,
+  "allow_zoom": false,
+  "background_color": "#FFFFFF",
+  "open_other_sites_in_app": true
+}
