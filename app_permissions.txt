@@ -1,0 +1,2 @@
+# App permissions added to the Android build by the K-Git workflow.
+android.permission.INTERNET
