@@ -360,13 +360,21 @@ jobs:
           set -euo pipefail
           if [ -f assets/icon/app_icon.png ]; then
             echo "Using assets/icon/app_icon.png as the app icon."
-            printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon/app_icon.png"\n  min_sdk_android: 21\n' > flutter_launcher_icons-kgit.yaml
+            printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon/app_icon.png"\n  min_sdk_android: 21\n' > flutter_launcher_icons.yaml
             flutter pub add --dev flutter_launcher_icons
-            dart run flutter_launcher_icons -f flutter_launcher_icons-kgit.yaml
+            dart run flutter_launcher_icons
+            # The file must be named flutter_launcher_icons.yaml. A name such as
+            # flutter_launcher_icons-kgit.yaml makes the tool treat it as a build flavor and write
+            # the icons to a folder that is never used, which left the default Flutter icon.
             # A template can ship an adaptive icon (mipmap-anydpi-v26) or point the
             # manifest at another icon name. Both would hide the new icon.
-            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher*.xml
+            # Remove every adaptive-icon definition (any mipmap-anydpi* folder, any drawable) so Android
+            # uses the PNG icons that were just generated.
+            find android/app/src/main/res -path '*mipmap-anydpi*' -name 'ic_launcher*.xml' -delete 2>/dev/null || true
             find android/app/src/main/res -name 'ic_launcher_foreground*' -delete 2>/dev/null || true
+            find android/app/src/main/res -name 'ic_launcher_background*' -delete 2>/dev/null || true
+            echo 'Launcher icon files now in the project:'
+            find android/app/src/main/res -name 'ic_launcher*' | sort
             if [ -f android/app/src/main/AndroidManifest.xml ]; then
               sed -i -E 's#android:icon="@[a-z]+/[A-Za-z0-9_]+"#android:icon="@mipmap/ic_launcher"#' android/app/src/main/AndroidManifest.xml
               sed -i -E 's#android:roundIcon="@[a-z]+/[A-Za-z0-9_]+"#android:roundIcon="@mipmap/ic_launcher"#' android/app/src/main/AndroidManifest.xml
