@@ -363,6 +363,14 @@ jobs:
             printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon/app_icon.png"\n  min_sdk_android: 21\n' > flutter_launcher_icons-kgit.yaml
             flutter pub add --dev flutter_launcher_icons
             dart run flutter_launcher_icons -f flutter_launcher_icons-kgit.yaml
+            # A template can ship an adaptive icon (mipmap-anydpi-v26) or point the
+            # manifest at another icon name. Both would hide the new icon.
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher*.xml
+            find android/app/src/main/res -name 'ic_launcher_foreground*' -delete 2>/dev/null || true
+            if [ -f android/app/src/main/AndroidManifest.xml ]; then
+              sed -i -E 's#android:icon="@[a-z]+/[A-Za-z0-9_]+"#android:icon="@mipmap/ic_launcher"#' android/app/src/main/AndroidManifest.xml
+              sed -i -E 's#android:roundIcon="@[a-z]+/[A-Za-z0-9_]+"#android:roundIcon="@mipmap/ic_launcher"#' android/app/src/main/AndroidManifest.xml
+            fi
           elif grep -q '^flutter_launcher_icons:' pubspec.yaml; then
             IMG="$(grep -m1 -E '^[[:space:]]+image_path:' pubspec.yaml | sed -E 's/^[^:]+:[[:space:]]*//;s/["'"'"']//g' | tr -d '\r')"
             if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
@@ -413,9 +421,14 @@ jobs:
                   re.search(r"(?m)^\s*compileSdk(?:Version)?\s*(?:=\s*)?36\b", p.read_text(encoding="utf-8"))
                   for p in candidates
               )
-              if not ok:
+              if not candidates:
+                  # Newer file_picker versions keep the Android code in android_file_picker,
+                  # which is patched above with every other plugin.
+                  print("file_picker has no Android module of its own. Nothing to verify.")
+              elif not ok:
                   raise SystemExit("Could not set or verify file_picker compileSdk 36.")
-              print("Verified file_picker Android module uses compileSdk 36.")
+              else:
+                  print("Verified file_picker Android module uses compileSdk 36.")
           else:
               print("This project does not use file_picker. Nothing to verify.")
 
