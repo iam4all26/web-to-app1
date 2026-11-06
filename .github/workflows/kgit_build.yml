@@ -355,10 +355,15 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Generate launcher icons (pubspec settings, or assets/icon/app_icon.png)
+      - name: Generate launcher icons (assets/icon/app_icon.png first, then pubspec settings)
         run: |
           set -euo pipefail
-          if grep -q '^flutter_launcher_icons:' pubspec.yaml; then
+          if [ -f assets/icon/app_icon.png ]; then
+            echo "Using assets/icon/app_icon.png as the app icon."
+            printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon/app_icon.png"\n  min_sdk_android: 21\n' > flutter_launcher_icons-kgit.yaml
+            flutter pub add --dev flutter_launcher_icons
+            dart run flutter_launcher_icons -f flutter_launcher_icons-kgit.yaml
+          elif grep -q '^flutter_launcher_icons:' pubspec.yaml; then
             IMG="$(grep -m1 -E '^[[:space:]]+image_path:' pubspec.yaml | sed -E 's/^[^:]+:[[:space:]]*//;s/["'"'"']//g' | tr -d '\r')"
             if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
               echo "::warning::Icon image '$IMG' was not found. The default Flutter icon is used."
@@ -366,11 +371,6 @@ jobs:
             fi
             grep -qE '^[[:space:]]+flutter_launcher_icons:' pubspec.yaml || flutter pub add --dev flutter_launcher_icons
             dart run flutter_launcher_icons
-          elif [ -f assets/icon/app_icon.png ]; then
-            echo "Using assets/icon/app_icon.png as the app icon."
-            printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon/app_icon.png"\n  min_sdk_android: 21\n' > flutter_launcher_icons-kgit.yaml
-            flutter pub add --dev flutter_launcher_icons
-            dart run flutter_launcher_icons -f flutter_launcher_icons-kgit.yaml
           else
             echo 'No icon settings in pubspec.yaml and no assets/icon/app_icon.png. The default Flutter icon is used.'
           fi
