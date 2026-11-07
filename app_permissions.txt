@@ -1,3 +1,2 @@
 # App permissions added to the Android build by the K-Git workflow.
-# One per line. Edit them in K-Git Studio, New Build, App permissions.
 android.permission.INTERNET

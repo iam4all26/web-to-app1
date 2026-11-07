@@ -1,12 +1,12 @@
 {
-  "url": "https://google.com",
+  "url": "https://token.kainuwa.africa",
   "javascript": true,
   "background_color": "#FFFFFF",
 
   "open_links_externally": "auto",
   "enable_downloads": true,
   "enable_print": true,
-  "enable_share": true,
+  "enable_share": false,
   "adapt_width": false,
   "allow_zoom": false,
   "screen_orientation": "auto",
