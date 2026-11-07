@@ -144,36 +144,6 @@ jobs:
                       print("Fingerprint: patched", f)
           PYCODE
 
-      - name: Wire AdMob (app_admob_id.txt holds the AdMob App ID)
-        run: |
-          if [ ! -f app_admob_id.txt ]; then
-            if grep -q google_mobile_ads pubspec.yaml; then
-              echo "::error::This app uses google_mobile_ads but app_admob_id.txt is missing. Put your AdMob App ID (ca-app-pub-123~456) in that file."
-              exit 1
-            fi
-            echo 'No AdMob in this app. Skipping.'
-            exit 0
-          fi
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          import re
-          lines = [l.strip() for l in Path("app_admob_id.txt").read_text(encoding="utf-8").splitlines() if l.strip()]
-          app_id = lines[0] if lines else ""
-          if not re.fullmatch(r"ca-app-pub-\d+~\d+", app_id):
-              raise SystemExit("app_admob_id.txt must hold an AdMob App ID like ca-app-pub-1234567890123456~1234567890")
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          content = manifest.read_text(encoding="utf-8")
-          if "com.google.android.gms.ads.APPLICATION_ID" in content:
-              print("AdMob App ID already in the manifest.")
-          else:
-              tag = '    <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="' + app_id + '"/>\n'
-              if "</application>" not in content:
-                  raise SystemExit("Could not find </application> in the manifest.")
-              content = content.replace("</application>", tag + "    </application>", 1)
-              manifest.write_text(content, encoding="utf-8")
-              print("Added the AdMob App ID to the manifest.")
-          PYCODE
-
       - name: Set Android compile SDK to API 36
         run: |
           python3 - <<'PYCODE'
