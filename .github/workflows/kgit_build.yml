@@ -48,7 +48,7 @@ jobs:
           if [ ! -d android ]; then
             # app_package.txt (one line, for example com.company.app) is the single place the package name lives.
             PKG="$(tr -d '[:space:]' < app_package.txt 2>/dev/null || true)"
-            if ! echo "$PKG" | grep -Eq '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'; then PKG="com.mycompany.webtoapp"; fi
+            if ! echo "$PKG" | grep -Eq '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'; then PKG="com.example.app"; fi
             flutter create --platforms=android --project-name "${PKG##*.}" --org "${PKG%.*}" /tmp/kgit_scaffold
             cp -r /tmp/kgit_scaffold/android ./android
             # App name: app_name.txt (one line) is the single place it lives. Without it, the pubspec name is title-cased.
