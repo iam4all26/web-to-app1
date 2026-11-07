@@ -1,2 +1,2 @@
-# App permissions added to the Android build by the K-Git workflow.
+# Required for website content and Android's native Download Manager.
 android.permission.INTERNET

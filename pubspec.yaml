@@ -1,7 +1,7 @@
 name: website_to_app
-description: A website packaged as an Android app.
+description: A website packaged as an Android app with Chrome-like in-app tabs and native Android downloads.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -9,7 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  webview_flutter: ^4.10.0
+  flutter_inappwebview: ^6.1.5
 
 dev_dependencies:
   flutter_test:

@@ -1,1 +1,1 @@
-com.mycompany.webtoapp
+com.mycompany.websiteapp
