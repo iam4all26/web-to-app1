@@ -3,524 +3,372 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:kgit_downloader/kgit_downloader.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-const MethodChannel _downloadsChannel = MethodChannel('website_to_app/downloads');
+import 'app_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   Map<String, dynamic> config = {};
   try {
-    config = jsonDecode(await rootBundle.loadString('app_config.json'))
-        as Map<String, dynamic>;
+    config = jsonDecode(await rootBundle.loadString('app_config.json')) as Map<String, dynamic>;
   } catch (_) {}
-  runApp(WebApp(config: config));
-}
-
-Color _color(String? hex) {
-  final h = (hex ?? '#FFFFFF').replaceAll('#', '');
-  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
-  return Color(v ?? 0xFFFFFFFF);
+  final settings = AppSettings(config);
+  switch (settings.orientation) {
+    case 'portrait':
+      await SystemChrome.setPreferredOrientations(
+          [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
+      break;
+    case 'landscape':
+      await SystemChrome.setPreferredOrientations(
+          [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+      break;
+    default:
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+  }
+  runApp(WebApp(settings: settings));
 }
 
 class WebApp extends StatelessWidget {
-  const WebApp({super.key, required this.config});
-  final Map<String, dynamic> config;
+  const WebApp({super.key, required this.settings});
+  final AppSettings settings;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.indigo,
-        scaffoldBackgroundColor: _color(config['background_color']?.toString()),
-      ),
-      home: WebPage(config: config),
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+      home: WebPage(settings: settings),
     );
   }
 }
 
-class _BrowserTab {
-  _BrowserTab({
-    required this.id,
-    required this.url,
-    this.windowId,
-    this.title = 'New tab',
-  });
-
-  final int id;
-  final int? windowId;
-  String url;
-  String title;
-  InAppWebViewController? controller;
-  int progress = 0;
-  bool failed = false;
-}
-
 class WebPage extends StatefulWidget {
-  const WebPage({super.key, required this.config});
-  final Map<String, dynamic> config;
+  const WebPage({super.key, required this.settings});
+  final AppSettings settings;
 
   @override
   State<WebPage> createState() => _WebPageState();
 }
 
 class _WebPageState extends State<WebPage> {
-  late final Uri _home;
-  final List<_BrowserTab> _tabs = [];
-  int _activeIndex = 0;
-  int _nextId = 0;
-  bool _showTabs = false;
+  InAppWebViewController? _web;
+  PullToRefreshController? _pull;
+  late final InAppWebViewSettings _viewSettings;
+  late final WebUri _home;
+  int _progress = 0;
+  bool _failed = false;
+  bool _cacheTried = false;
 
-  bool get _showProgress => widget.config['show_loading_bar'] != false;
-  bool get _stayInApp => widget.config['open_other_sites_in_app'] != false;
-  bool get _javascript => widget.config['javascript'] != false;
-  bool get _allowZoom => widget.config['allow_zoom'] == true;
-  _BrowserTab get _activeTab => _tabs[_activeIndex];
+  AppSettings get _s => widget.settings;
+
+  CacheMode get _normalCache => _s.updateAlways ? CacheMode.LOAD_NO_CACHE : CacheMode.LOAD_DEFAULT;
 
   @override
   void initState() {
     super.initState();
-    _home = Uri.parse(
-      (widget.config['url'] ?? 'https://example.com').toString(),
+    _home = WebUri(_s.url);
+    _viewSettings = InAppWebViewSettings(
+      javaScriptEnabled: _s.javascript,
+      useShouldOverrideUrlLoading: true,
+      useOnDownloadStart: true,
+      // new-window requests (target="_blank", window.open) reach onCreateWindow
+      javaScriptCanOpenWindowsAutomatically: true,
+      supportMultipleWindows: _s.externalLinks != ExternalLinks.no,
+      supportZoom: _s.zoom,
+      builtInZoomControls: _s.zoom,
+      displayZoomControls: false,
+      useWideViewPort: true,
+      loadWithOverviewMode: _s.adaptWidth,
+      cacheMode: _normalCache,
+      transparentBackground: false,
+      mediaPlaybackRequiresUserGesture: false,
+      userAgent: _s.userAgent.isEmpty ? null : _s.userAgent,
     );
-    _tabs.add(_BrowserTab(id: _nextId++, url: _home.toString(), title: 'Home'));
-  }
-
-  Future<void> _newTab({String? url, int? windowId}) async {
-    setState(() {
-      _tabs.add(_BrowserTab(
-        id: _nextId++,
-        url: url ?? _home.toString(),
-        windowId: windowId,
-      ));
-      _activeIndex = _tabs.length - 1;
-      _showTabs = false;
-    });
-  }
-
-  Future<void> _closeTab(int index) async {
-    if (_tabs.length == 1) {
-      final tab = _tabs.first;
-      await tab.controller?.loadUrl(
-        urlRequest: URLRequest(url: WebUri(_home.toString())),
+    if (_s.pullToRefresh) {
+      _pull = PullToRefreshController(
+        settings: PullToRefreshSettings(enabled: true),
+        onRefresh: () async {
+          await _web?.reload();
+        },
       );
-      if (!mounted) return;
-      setState(() {
-        tab.url = _home.toString();
-        tab.title = 'Home';
-        tab.failed = false;
-        tab.progress = 0;
-        _activeIndex = 0;
-        _showTabs = false;
-      });
-      return;
     }
-    setState(() {
-      _tabs.removeAt(index);
-      if (_activeIndex > index) {
-        _activeIndex--;
-      } else if (_activeIndex == index) {
-        _activeIndex = (index - 1).clamp(0, _tabs.length - 1);
-      }
-      _showTabs = false;
-    });
   }
 
-  Future<bool> _handleBack() async {
-    if (_showTabs) {
-      setState(() => _showTabs = false);
-      return true;
-    }
-    final controller = _activeTab.controller;
-    if (controller != null && await controller.canGoBack()) {
-      await controller.goBack();
-      return true;
-    }
-    if (_tabs.length > 1) {
-      await _closeTab(_activeIndex);
-      return true;
-    }
-    return false;
-  }
+  // ---- links -------------------------------------------------------------
 
-  Future<void> _startDownload(dynamic request) async {
-    final url = request.url.toString();
-    final tab = _activeTab;
+  /// Opens a page in a Chrome Custom Tab. The app page underneath is untouched
+  /// and Back returns to it. Falls back to the default browser app.
+  Future<void> _openExternal(Uri uri) async {
     try {
-      await _downloadsChannel.invokeMethod('enqueue', {
-        'url': url,
-        'fileName': request.suggestedFilename ?? '',
-        'mimeType': request.mimeType ?? 'application/octet-stream',
-        'userAgent': await tab.controller?.evaluateJavascript(
-          source: 'navigator.userAgent',
-        ),
-        'cookie': await CookieManager.instance().getCookies(
-          url: WebUri(url),
-        ).then((cookies) => cookies
-            .map((cookie) => '${cookie.name}=${cookie.value}')
-            .join('; ')),
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Download started. Check your device notifications or Downloads.'),
-        ),
-      );
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not start download: ${error.message ?? error.code}')),
+      await ChromeSafariBrowser().open(
+        url: WebUri.uri(uri),
+        settings: ChromeSafariBrowserSettings(showTitle: true),
       );
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This download is not supported on this device.')),
-      );
+      try {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {}
     }
   }
+
+  /// tel:, mailto:, intent:, whatsapp: and similar go to the app that owns them.
+  Future<void> _openApp(Uri uri) async {
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  static bool _isWeb(Uri u) => u.scheme == 'http' || u.scheme == 'https';
+  static bool _isInline(Uri u) =>
+      u.scheme == 'about' || u.scheme == 'data' || u.scheme == 'blob' || u.scheme == 'file' || u.scheme == 'javascript';
+
+  // ---- downloads ---------------------------------------------------------
+
+  void _toast(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+  }
+
+  Future<void> _download(InAppWebViewController c, DownloadStartRequest r) async {
+    if (!_s.downloads) {
+      _toast('Downloads are turned off in this app.');
+      return;
+    }
+    final uri = Uri.tryParse(r.url.toString());
+    if (uri == null || !_isWeb(uri)) {
+      _toast('This kind of file cannot be downloaded.');
+      return;
+    }
+    try {
+      final cookies = await CookieManager.instance().getCookies(url: r.url, webViewController: c);
+      final cookie = cookies.map((e) => '${e.name}=${e.value}').join('; ');
+      final page = await c.getUrl();
+      final name = await KgitDownloader.enqueue(
+        url: r.url.toString(),
+        fileName: r.suggestedFilename,
+        mimeType: r.mimeType,
+        contentDisposition: r.contentDisposition,
+        userAgent: (r.userAgent != null && r.userAgent!.isNotEmpty) ? r.userAgent : _s.userAgent,
+        cookie: cookie,
+        referer: page?.toString(),
+        headers: _s.headers,
+      );
+      _toast('Downloading $name');
+    } catch (_) {
+      // Android refused it (old phone without storage access, for example):
+      // let Chrome handle the download.
+      await _openExternal(uri);
+    }
+  }
+
+  // ---- page actions ------------------------------------------------------
+
+  Future<void> _printPage() async {
+    try {
+      await _web?.printCurrentPage();
+    } catch (_) {
+      _toast('Printing is not available on this phone.');
+    }
+  }
+
+  Future<void> _sharePage() async {
+    final u = await _web?.getUrl();
+    await Share.share((u ?? _home).toString());
+  }
+
+  void _showMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (_s.share)
+            ListTile(
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('Share this page'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _sharePage();
+              },
+            ),
+          if (_s.print)
+            ListTile(
+              leading: const Icon(Icons.print_outlined),
+              title: const Text('Print this page'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _printPage();
+              },
+            ),
+        ]),
+      ),
+    );
+  }
+
+  // ---- loading and errors ------------------------------------------------
+
+  Future<void> _useCache(bool on) async {
+    _viewSettings.cacheMode = on ? CacheMode.LOAD_CACHE_ONLY : _normalCache;
+    await _web?.setSettings(settings: _viewSettings);
+  }
+
+  Future<void> _fixViewport(InAppWebViewController c) async {
+    await c.evaluateJavascript(source: '''
+      (function () {
+        var v = 'width=device-width, initial-scale=1';
+        var m = document.querySelector('meta[name=viewport]');
+        if (m) { m.setAttribute('content', v); }
+        else { m = document.createElement('meta'); m.name = 'viewport'; m.content = v; document.head.appendChild(m); }
+      })();
+    ''');
+  }
+
+  Future<void> _reloadHome() async {
+    setState(() => _failed = false);
+    _cacheTried = false;
+    await _useCache(false);
+    await _web?.loadUrl(urlRequest: URLRequest(url: _home, headers: _s.headers));
+  }
+
+  // ---- build -------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    final tab = _activeTab;
+    final showMenu = _s.print || _s.share;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        if (!await _handleBack() && mounted) SystemNavigator.pop();
+        final c = _web;
+        if (c != null && await c.canGoBack()) {
+          await c.goBack();
+        } else {
+          SystemNavigator.pop();
+        }
       },
       child: Scaffold(
+        backgroundColor: _s.backgroundColor,
         body: SafeArea(
-          child: Column(
-            children: [
-              _browserBar(tab),
-              Expanded(
-                child: Stack(
-                  children: [
-                    IndexedStack(
-                      index: _activeIndex,
-                      children: _tabs.map(_buildTab).toList(),
-                    ),
-                    if (_showTabs) _tabOverview(),
-                  ],
-                ),
-              ),
-              _bottomBar(tab),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _browserBar(_BrowserTab tab) {
-    return Material(
-      elevation: 1,
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: 'Home',
-              onPressed: () => tab.controller?.loadUrl(
-                urlRequest: URLRequest(url: WebUri(_home.toString())),
-              ),
-              icon: const Icon(Icons.home_outlined),
+          child: Stack(children: [
+            InAppWebView(
+              initialUrlRequest: URLRequest(url: _home, headers: _s.headers),
+              initialSettings: _viewSettings,
+              pullToRefreshController: _pull,
+              onWebViewCreated: (c) => _web = c,
+              onProgressChanged: (c, p) {
+                if (mounted) setState(() => _progress = p);
+              },
+              onLoadStart: (c, url) {
+                if (_failed && mounted) setState(() => _failed = false);
+              },
+              onLoadStop: (c, url) async {
+                _pull?.endRefreshing();
+                if (_cacheTried) {
+                  // the cached copy is showing; go back to the normal mode for the next page
+                  _cacheTried = false;
+                  await _useCache(false);
+                }
+                if (_s.adaptWidth) await _fixViewport(c);
+              },
+              onReceivedError: (c, request, error) async {
+                if (request.isForMainFrame == false) return;
+                if (error.description.contains('ERR_ABORTED')) return;
+                _pull?.endRefreshing();
+                if (_s.allowOffline && !_s.updateAlways && !_cacheTried) {
+                  _cacheTried = true;
+                  await _useCache(true);
+                  await c.loadUrl(urlRequest: URLRequest(url: request.url));
+                  return;
+                }
+                if (_cacheTried) {
+                  _cacheTried = false;
+                  await _useCache(false);
+                }
+                if (mounted) setState(() => _failed = true);
+              },
+              shouldOverrideUrlLoading: (c, action) async {
+                final uri = Uri.tryParse(action.request.url?.toString() ?? '');
+                if (uri == null || !action.isForMainFrame) return NavigationActionPolicy.ALLOW;
+                if (_isInline(uri)) return NavigationActionPolicy.ALLOW;
+                if (!_isWeb(uri)) {
+                  await _openApp(uri);
+                  return NavigationActionPolicy.CANCEL;
+                }
+                if (_s.externalLinks == ExternalLinks.yes && !_s.isInternal(uri)) {
+                  await _openExternal(uri);
+                  return NavigationActionPolicy.CANCEL;
+                }
+                return NavigationActionPolicy.ALLOW;
+              },
+              onCreateWindow: (c, action) async {
+                final u = action.request.url;
+                final uri = u == null ? null : Uri.tryParse(u.toString());
+                if (uri == null || uri.toString().isEmpty || uri.scheme == 'about') {
+                  return false; // an empty pop-up: nothing to open
+                }
+                if (!_isWeb(uri)) {
+                  await _openApp(uri);
+                  return true;
+                }
+                if (_s.externalLinks == ExternalLinks.no) {
+                  await c.loadUrl(urlRequest: URLRequest(url: u));
+                } else {
+                  await _openExternal(uri);
+                }
+                return true;
+              },
+              onDownloadStartRequest: _download,
+              onPrintRequest: (c, url, job) async {
+                if (_s.print) {
+                  await _printPage();
+                }
+                return true; // we handled it (or print is off)
+              },
             ),
-            Expanded(
-              child: Container(
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.lock_outline, size: 16),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        tab.url,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Reload',
-                      onPressed: () => tab.controller?.reload(),
-                      icon: const Icon(Icons.refresh, size: 19),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: 'New tab',
-              onPressed: () => _newTab(),
-              icon: const Icon(Icons.add),
-            ),
-            IconButton(
-              tooltip: 'Tabs',
-              onPressed: () => setState(() => _showTabs = !_showTabs),
-              icon: _TabCountIcon(count: _tabs.length),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTab(_BrowserTab tab) {
-    return Stack(
-      children: [
-        InAppWebView(
-          key: ValueKey('webview-${tab.id}'),
-          windowId: tab.windowId,
-          initialUrlRequest: tab.windowId == null
-              ? URLRequest(url: WebUri(tab.url))
-              : null,
-          initialSettings: InAppWebViewSettings(
-            javaScriptEnabled: _javascript,
-            supportMultipleWindows: true,
-            javaScriptCanOpenWindowsAutomatically: true,
-            useOnDownloadStart: true,
-            allowsBackForwardNavigationGestures: true,
-            builtInZoomControls: _allowZoom,
-            displayZoomControls: false,
-            thirdPartyCookiesEnabled: true,
-          ),
-          onWebViewCreated: (controller) => tab.controller = controller,
-          onTitleChanged: (controller, title) {
-            if (!mounted) return;
-            setState(() => tab.title = title ?? tab.title);
-          },
-          onUpdateVisitedHistory: (controller, url, isReload) {
-            if (!mounted || url == null) return;
-            setState(() => tab.url = url.toString());
-          },
-          onProgressChanged: (controller, progress) {
-            if (!mounted) return;
-            setState(() => tab.progress = progress);
-          },
-          onLoadStart: (controller, url) {
-            if (!mounted) return;
-            setState(() => tab.failed = false);
-          },
-          onReceivedError: (controller, request, error) {
-            if (request.isForMainFrame == true && mounted) {
-              setState(() => tab.failed = true);
-            }
-          },
-          onDownloadStartRequest: (controller, request) {
-            _startDownload(request);
-          },
-          shouldOverrideUrlLoading: (controller, action) async {
-            final uri = action.request.url;
-            if (uri == null) return NavigationActionPolicy.ALLOW;
-            if (!_stayInApp && uri.host.isNotEmpty && uri.host != _home.host) {
-              return NavigationActionPolicy.CANCEL;
-            }
-            return NavigationActionPolicy.ALLOW;
-          },
-          onCreateWindow: (controller, action) async {
-            await _newTab(
-              url: action.request.url?.toString(),
-              windowId: action.windowId,
-            );
-            return true;
-          },
-        ),
-        if (_showProgress && tab.progress < 100 && !tab.failed)
-          LinearProgressIndicator(value: tab.progress / 100, minHeight: 2),
-        if (tab.failed)
-          Positioned.fill(
-            child: ColoredBox(
-              color: Theme.of(context).colorScheme.surface,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.wifi_off_rounded, size: 52),
-                      const SizedBox(height: 12),
-                      const Text('Could not load the page.'),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        onPressed: () {
-                          setState(() => tab.failed = false);
-                          tab.controller?.reload();
-                        },
-                        child: const Text('Try again'),
-                      ),
-                    ],
+            if (_s.loader && _progress < 100 && !_failed)
+              LinearProgressIndicator(value: _progress / 100, minHeight: 3),
+            if (showMenu)
+              Positioned(
+                right: 12,
+                bottom: 12,
+                child: Material(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  shape: const CircleBorder(),
+                  child: IconButton(
+                    icon: const Icon(Icons.more_horiz, color: Colors.white),
+                    tooltip: 'More',
+                    onPressed: _showMenu,
                   ),
                 ),
               ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _tabOverview() {
-    return ColoredBox(
-      color: Theme.of(context).colorScheme.surface,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('Tabs (${_tabs.length})',
-                      style: Theme.of(context).textTheme.titleLarge),
-                ),
-                IconButton(
-                  tooltip: 'New tab',
-                  onPressed: () => _newTab(),
-                  icon: const Icon(Icons.add),
-                ),
-                IconButton(
-                  tooltip: 'Close tab overview',
-                  onPressed: () => setState(() => _showTabs = false),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.all(12),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 1.18,
-              ),
-              itemCount: _tabs.length,
-              itemBuilder: (context, index) {
-                final item = _tabs[index];
-                final selected = index == _activeIndex;
-                return InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () => setState(() {
-                    _activeIndex = index;
-                    _showTabs = false;
-                  }),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: selected
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).dividerColor,
-                        width: selected ? 2 : 1,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.language, size: 18),
-                            const Spacer(),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              onPressed: () => _closeTab(index),
-                              icon: const Icon(Icons.close, size: 18),
-                            ),
-                          ],
-                        ),
-                        const Spacer(),
-                        Text(item.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 4),
-                        Text(
-                          item.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
+            if (_failed)
+              Container(
+                color: Theme.of(context).colorScheme.surface,
+                alignment: Alignment.center,
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.wifi_off_rounded, size: 56),
+                  const SizedBox(height: 12),
+                  Text(
+                    _s.offlineMessage.isEmpty ? 'Could not load the page.' : _s.offlineMessage,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 16),
                   ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _bottomBar(_BrowserTab tab) {
-    return Material(
-      elevation: 4,
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 5),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            IconButton(
-              tooltip: 'Back',
-              onPressed: () async {
-                if (await tab.controller?.canGoBack() ?? false) {
-                  await tab.controller?.goBack();
-                }
-              },
-              icon: const Icon(Icons.arrow_back),
-            ),
-            IconButton(
-              tooltip: 'Forward',
-              onPressed: () async {
-                if (await tab.controller?.canGoForward() ?? false) {
-                  await tab.controller?.goForward();
-                }
-              },
-              icon: const Icon(Icons.arrow_forward),
-            ),
-            IconButton(
-              tooltip: 'New tab',
-              onPressed: () => _newTab(),
-              icon: const Icon(Icons.add_circle_outline),
-            ),
-            IconButton(
-              tooltip: 'Close current tab',
-              onPressed: () => _closeTab(_activeIndex),
-              icon: const Icon(Icons.close),
-            ),
-          ],
+                  if (_s.offlineMessage.isEmpty) ...[
+                    const SizedBox(height: 4),
+                    const Text('Check your internet connection.'),
+                  ],
+                  const SizedBox(height: 16),
+                  FilledButton(onPressed: _reloadHome, child: const Text('Try again')),
+                ]),
+              ),
+          ]),
         ),
-      ),
-    );
-  }
-}
-
-class _TabCountIcon extends StatelessWidget {
-  const _TabCountIcon({required this.count});
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 26,
-      height: 26,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          const Icon(Icons.crop_square, size: 27),
-          Text('$count',
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
-        ],
       ),
     );
   }
