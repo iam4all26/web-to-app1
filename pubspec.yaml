@@ -15,6 +15,12 @@ dependencies:
   kgit_downloader:
     path: packages/kgit_downloader
 
+dependency_overrides:
+  # Local copy of flutter_inappwebview_android 1.1.3 with two Gradle fixes
+  # (ProGuard file name and lint block) that newer Android Gradle versions need.
+  flutter_inappwebview_android:
+    path: packages/flutter_inappwebview_android
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

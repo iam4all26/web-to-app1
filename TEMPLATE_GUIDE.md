@@ -75,3 +75,5 @@ Old projects that use `show_loading_bar` or `open_other_sites_in_app` keep worki
 3. To change a setting, edit `app_config.json`, then commit, push and build again.
 
 Do not change `lib/` or `packages/` unless you know Flutter and Android.
+
+`packages/flutter_inappwebview_android` is a patched copy of the WebView plugin so it builds with current Android tools. Leave it as it is.
