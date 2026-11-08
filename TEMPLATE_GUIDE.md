@@ -12,6 +12,7 @@ This project shows your website inside an Android app. The website stays in the 
   "javascript": true,
   "background_color": "#FFFFFF",
   "open_links_externally": "auto",
+  "new_window_mode": "in_app",
   "enable_downloads": true,
   "enable_print": false,
   "enable_share": false,
@@ -34,6 +35,7 @@ This project shows your website inside an Android app. The website stays in the 
 | `javascript` | true / false | Keep `true` unless your site works without JavaScript. |
 | `background_color` | `#RRGGBB` | Colour behind the page while it loads. |
 | `open_links_externally` | `auto` / `yes` / `no` | `auto`: links meant for a new tab or window (`target="_blank"`, `window.open`) open in Chrome, normal links stay in the app. `yes`: every link to another website and every new window opens in Chrome. `no`: everything stays in the app. |
+| `new_window_mode` | `in_app` / `chrome` | Where new tabs and outside links open. `in_app` (default): a page on top of your app with a close button; Back returns to the app, and Chrome is never opened. `chrome`: a Chrome Custom Tab. A link that is a file (PDF, ZIP, APK and similar) or turns into a download is saved to Downloads and no page stays open. |
 | `enable_downloads` | true / false | `true`: files go to Android's Download Manager (Downloads folder and notification). `false`: downloads are blocked. |
 | `enable_print` | true / false | Handles `window.print()` and adds a "Print this page" item to the small menu button. |
 | `enable_share` | true / false | Adds "Share this page" to the small menu button. |

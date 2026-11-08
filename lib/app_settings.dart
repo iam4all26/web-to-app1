@@ -10,6 +10,7 @@ class AppSettings {
         javascript = j['javascript'] != false,
         backgroundColor = _color(j['background_color']?.toString()),
         externalLinks = _links(j),
+        newWindowInApp = (j['new_window_mode'] ?? 'in_app').toString().trim().toLowerCase() != 'chrome',
         downloads = _bool(j['enable_downloads'], true),
         print = _bool(j['enable_print'], false),
         share = _bool(j['enable_share'], false),
@@ -28,6 +29,8 @@ class AppSettings {
   final bool javascript;
   final Color backgroundColor;
   final ExternalLinks externalLinks;
+  /// true: new windows and outside links open in a page inside the app. false: Chrome Custom Tab.
+  final bool newWindowInApp;
   final bool downloads;
   final bool print;
   final bool share;
@@ -41,6 +44,19 @@ class AppSettings {
   final String offlineMessage;
   final String userAgent;
   final Map<String, String> headers;
+
+  static const _fileExt = {
+    'pdf', 'zip', 'rar', '7z', 'apk', 'aab', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    'csv', 'mp3', 'wav', 'm4a', 'mp4', 'mkv', 'avi', 'mov', 'epub', 'exe', 'dmg', 'iso', 'tar', 'gz',
+  };
+
+  /// True when the link points straight at a file that should be downloaded, not shown.
+  static bool looksLikeFile(Uri u) {
+    final path = u.path.toLowerCase();
+    final dot = path.lastIndexOf('.');
+    if (dot < 0 || dot == path.length - 1) return false;
+    return _fileExt.contains(path.substring(dot + 1));
+  }
 
   /// True when [url] belongs to the configured website (same host or a subdomain).
   bool isInternal(Uri u) {

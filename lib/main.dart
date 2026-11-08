@@ -3,11 +3,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:kgit_downloader/kgit_downloader.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app_settings.dart';
+import 'downloads.dart';
+import 'popup_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -99,9 +100,25 @@ class _WebPageState extends State<WebPage> {
 
   // ---- links -------------------------------------------------------------
 
-  /// Opens a page in a Chrome Custom Tab. The app page underneath is untouched
-  /// and Back returns to it. Falls back to the default browser app.
+  /// Opens a page without leaving the app (a page on top of the main one;
+  /// Back or the close button returns), or in a Chrome Custom Tab when
+  /// "new_window_mode" is "chrome". A link to a plain file is downloaded instead.
   Future<void> _openExternal(Uri uri) async {
+    if (_s.downloads && AppSettings.looksLikeFile(uri)) {
+      await _downloadUrl(uri);
+      return;
+    }
+    if (_s.newWindowInApp && mounted) {
+      final r = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => PopupPage(settings: _s, url: WebUri.uri(uri))),
+      );
+      if (r != null && r.isNotEmpty) _toast('Downloading $r');
+      return;
+    }
+    await _openChrome(uri);
+  }
+
+  Future<void> _openChrome(Uri uri) async {
     try {
       await ChromeSafariBrowser().open(
         url: WebUri.uri(uri),
@@ -111,6 +128,17 @@ class _WebPageState extends State<WebPage> {
       try {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } catch (_) {}
+    }
+  }
+
+  /// Downloads a direct file link without opening any page.
+  Future<void> _downloadUrl(Uri uri) async {
+    try {
+      final page = await _web?.getUrl();
+      final name = await startDownload(_s, url: WebUri.uri(uri), referer: page?.toString());
+      _toast('Downloading $name');
+    } catch (_) {
+      await _openChrome(uri);
     }
   }
 
@@ -145,24 +173,21 @@ class _WebPageState extends State<WebPage> {
       return;
     }
     try {
-      final cookies = await CookieManager.instance().getCookies(url: r.url, webViewController: c);
-      final cookie = cookies.map((e) => '${e.name}=${e.value}').join('; ');
       final page = await c.getUrl();
-      final name = await KgitDownloader.enqueue(
-        url: r.url.toString(),
+      final name = await startDownload(
+        _s,
+        url: r.url,
         fileName: r.suggestedFilename,
         mimeType: r.mimeType,
         contentDisposition: r.contentDisposition,
-        userAgent: (r.userAgent != null && r.userAgent!.isNotEmpty) ? r.userAgent : _s.userAgent,
-        cookie: cookie,
+        userAgent: r.userAgent,
         referer: page?.toString(),
-        headers: _s.headers,
       );
       _toast('Downloading $name');
     } catch (_) {
       // Android refused it (old phone without storage access, for example):
       // let Chrome handle the download.
-      await _openExternal(uri);
+      await _openChrome(uri);
     }
   }
 
@@ -297,6 +322,10 @@ class _WebPageState extends State<WebPage> {
                 if (_isInline(uri)) return NavigationActionPolicy.ALLOW;
                 if (!_isWeb(uri)) {
                   await _openApp(uri);
+                  return NavigationActionPolicy.CANCEL;
+                }
+                if (_s.downloads && AppSettings.looksLikeFile(uri)) {
+                  await _downloadUrl(uri);
                   return NavigationActionPolicy.CANCEL;
                 }
                 if (_s.externalLinks == ExternalLinks.yes && !_s.isInternal(uri)) {
